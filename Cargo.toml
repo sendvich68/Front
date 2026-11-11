@@ -3,6 +3,11 @@ name = "pixel-war"
 version = "0.1.0"
 edition = "2021"
 
+# ДОБАВЬТЕ ЭТУ СЕКЦИЮ
+[lib]
+name = "pixel_war"
+crate-type = ["cdylib", "rlib"] 
+
 [dependencies]
 macroquad = "0.4"
 
@@ -15,9 +20,8 @@ opt-level = 3
 [package.metadata.android]
 package_name = "com.example.pixelwar"
 apk_label = "Pixel War"
-# Убираем квадратные скобки у assets
-assets = "assets" 
+# assets = "assets" # Оставляем закомментированным, раз папки нет
 
 [package.metadata.android.sdk]
 min_sdk_version = 21
-target_sdk_version = 31  # <-- Изменили с 33 на 31
+target_sdk_version = 31
