@@ -11,9 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -24,8 +21,12 @@ jobs:
 
       - name: Build APK
         run: |
-          # Указываем путь к NDK (он предустановлен в образах GitHub Actions)
+          # GitHub Actions раннеры уже имеют установленный Android SDK и NDK
+          # Просто указываем на них пути
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
           export NDK_HOME=$ANDROID_NDK_HOME
+          
+          # Собираем APK
           cargo apk build --release
 
       - name: Upload APK
