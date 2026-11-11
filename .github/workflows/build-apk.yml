@@ -16,7 +16,8 @@ jobs:
           docker run --rm \
             -v $(pwd):/root/src \
             -w /root/src \
-            notfl3/cargo-apk cargo apk build --release
+            notfl3/cargo-apk \
+            bash -c "cargo install cargo-apk && cargo apk build --release"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
