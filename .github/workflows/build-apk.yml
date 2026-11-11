@@ -21,10 +21,17 @@ jobs:
 
       - name: Build APK
         run: |
-          # GitHub Actions раннеры уже имеют установленный Android SDK и NDK
-          # Просто указываем на них пути
+          # Указываем пути к SDK и NDK
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export NDK_HOME=$ANDROID_NDK_HOME
+          
+          # Принудительно устанавливаем нужную платформу (API 31)
+          # Если sdkmanager не в PATH, используем полный путь
+          if [ -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-31" || true
+          else
+            $ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager "platforms;android-31" || true
+          fi
           
           # Собираем APK
           cargo apk build --release
