@@ -10,9 +10,9 @@ enum UnitType {
     Tank,       // Танк (темно-зеленый) - Наземный
     Btr,        // БТР (оливковый) - Наземный
     Uav,        // БПЛА (серый) - Воздушный
-    Radar,      // Радар (голубой) - Наземный, поддержка
+    Radar,      // Радар (голубой) - Наземный
     Helicopter, // Вертолет (желтый) - Воздушный
-    Pvo,        // ПВО (красный) - Наземный, только по воздуху
+    Pvo,        // ПВО (красный) - Наземный
 }
 
 impl UnitType {
@@ -51,7 +51,6 @@ struct Unit {
     unit_type: UnitType,
     hp: f32,
     max_hp: f32,
-    selected: bool,
     target_pos: Option<Vec2>,
     attack_cooldown: f32,
 }
@@ -64,7 +63,6 @@ impl Unit {
             unit_type,
             hp,
             max_hp: hp,
-            selected: false,
             target_pos: None,
             attack_cooldown: 0.0,
         }
@@ -73,31 +71,19 @@ impl Unit {
 
 #[macroquad::main("Pixel War")]
 async fn main() {
-    // Пытаемся загрузить карту, если нет - создаем текстуру-заглушку
-    let map_texture = match load_texture("assets/map.png").await {
-        Ok(tex) => tex,
-        Err(_) => {
-            println!("Map not found, generating placeholder...");
-            let mut img = Image::gen_image_color(
-                (MAP_WIDTH as f32 * TILE_SIZE) as u16,
-                (MAP_HEIGHT as f32 * TILE_SIZE) as u16,
-                LIGHTGRAY,
-            );
-            // Рисуем условную границу
-            for x in 0..img.width() {
-                for y in (MAP_HEIGHT as f32 * TILE_SIZE * 0.5) as u16..((MAP_HEIGHT as f32 * TILE_SIZE * 0.5) + 2.0) as u16 {
-                    img.set_pixel(x as u32, y as u32, BLACK);
-                }
-            }
-            Texture2D::from_image(&img)
-        }
-    };
+    // Пытаемся загрузить карту
+    let map_texture_result = load_texture("assets/map.png").await;
+    let has_map = map_texture_result.is_ok();
+    let map_texture = map_texture_result.unwrap_or_else(|_| {
+        // Если карты нет, создаем пустую заглушку 1x1, чтобы код компилировался
+        Texture2D::from_image(&Image::gen_image_color(1, 1, WHITE))
+    });
 
     let mut units: Vec<Unit> = Vec::new();
     let mut selected_type = UnitType::Soldier;
     let mut selected_unit_index: Option<usize> = None;
     
-    // Спавним пару стартовых юнитов
+    // Спавним пару стартовых юнитов для теста
     units.push(Unit::new(vec2(5.0 * TILE_SIZE, 5.0 * TILE_SIZE), UnitType::Tank));
     units.push(Unit::new(vec2(10.0 * TILE_SIZE, 5.0 * TILE_SIZE), UnitType::Pvo));
     units.push(Unit::new(vec2(15.0 * TILE_SIZE, 5.0 * TILE_SIZE), UnitType::Radar));
@@ -107,7 +93,7 @@ async fn main() {
         let (mx, my) = mouse_position();
         let mouse_pos = vec2(mx, my);
 
-        // Сетка для клика
+        // Привязка к сетке
         let grid_pos = vec2(
             (mouse_pos.x / TILE_SIZE).floor() * TILE_SIZE + TILE_SIZE / 2.0,
             (mouse_pos.y / TILE_SIZE).floor() * TILE_SIZE + TILE_SIZE / 2.0,
@@ -126,14 +112,14 @@ async fn main() {
         if is_mouse_button_pressed(MouseButton::Left) {
             let mut hit = false;
             for (i, unit) in units.iter().enumerate() {
-                if unit.pos.distance(mouse_pos) < TILE_SIZE / 2.0 {
+                // Радиус клика чуть больше визуального размера юнита для удобства
+                if unit.pos.distance(mouse_pos) < TILE_SIZE / 1.5 {
                     selected_unit_index = Some(i);
                     hit = true;
                     break;
                 }
             }
             if !hit {
-                // Спавн только в пределах сетки
                 if grid_pos.x < MAP_WIDTH as f32 * TILE_SIZE && grid_pos.y < MAP_HEIGHT as f32 * TILE_SIZE {
                     units.push(Unit::new(grid_pos, selected_type));
                     selected_unit_index = Some(units.len() - 1);
@@ -154,15 +140,15 @@ async fn main() {
         }
 
         // --- Логика (Обновление) ---
-        // 1. Движение и поиск целей
-        let mut new_units = Vec::new();
+        let mut damage_queue: Vec<(usize, f32)> = Vec::new();
+
         for i in 0..units.len() {
             let (speed, atk_range, damage, can_atk_air, can_atk_ground) = {
                 let (_, spd, rng, dmg, air, grd) = units[i].unit_type.stats();
                 (spd, rng, dmg, air, grd)
             };
 
-            // Движение к цели
+            // Движение
             if let Some(target) = units[i].target_pos {
                 let dir = target - units[i].pos;
                 if dir.length() > 2.0 {
@@ -173,43 +159,39 @@ async fn main() {
                 }
             }
 
-            // Кулдаун атаки
+            // Кулдаун
             if units[i].attack_cooldown > 0.0 {
                 units[i].attack_cooldown -= dt;
             }
 
-            // Поиск врага (для простоты все юниты враги, если это не мы)
+            // Поиск и атака
             if damage > 0.0 && units[i].attack_cooldown <= 0.0 {
                 let mut closest_enemy: Option<usize> = None;
                 let mut closest_dist = atk_range;
 
                 for j in 0..units.len() {
                     if i == j { continue; }
-                    let is_enemy = true; // Упрощенно: все враги
                     let enemy_is_air = units[j].unit_type.is_air();
                     
-                    if is_enemy {
-                        if enemy_is_air && !can_atk_air { continue; }
-                        if !enemy_is_air && !can_atk_ground { continue; }
+                    if enemy_is_air && !can_atk_air { continue; }
+                    if !enemy_is_air && !can_atk_ground { continue; }
 
-                        let dist = units[i].pos.distance(units[j].pos);
-                        if dist < closest_dist {
-                            closest_dist = dist;
-                            closest_enemy = Some(j);
-                        }
+                    let dist = units[i].pos.distance(units[j].pos);
+                    if dist < closest_dist {
+                        closest_dist = dist;
+                        closest_enemy = Some(j);
                     }
                 }
 
                 if let Some(enemy_idx) = closest_enemy {
-                    // Атакуем
                     units[i].attack_cooldown = 1.0; // 1 выстрел в секунду
-                    new_units.push((enemy_idx, damage)); // Запоминаем урон для нанесения после цикла
+                    damage_queue.push((enemy_idx, damage)); 
                 }
             }
         }
 
-        // Наносим урон
-        for (idx, dmg) in new_units {
+        // Наносим урон (вне цикла, чтобы избежать проблем с заимствованием)
+        for (idx, dmg) in damage_queue {
             if idx < units.len() {
                 units[idx].hp -= dmg;
             }
@@ -228,15 +210,22 @@ async fn main() {
         // --- Отрисовка ---
         clear_background(BLACK);
 
-        // 1. Карта
-        draw_texture(&map_texture, 0.0, 0.0, WHITE);
+        // 1. Отрисовка карты
+        if has_map {
+            draw_texture(&map_texture, 0.0, 0.0, WHITE);
+        } else {
+            // Заглушка: Условная Россия (светло-серая) и Украина (светло-желтая)
+            draw_rectangle(0.0, 0.0, MAP_WIDTH as f32 * TILE_SIZE, MAP_HEIGHT as f32 * TILE_SIZE * 0.5, Color::new(0.8, 0.8, 0.8, 1.0));
+            draw_rectangle(0.0, MAP_HEIGHT as f32 * TILE_SIZE * 0.5, MAP_WIDTH as f32 * TILE_SIZE, MAP_HEIGHT as f32 * TILE_SIZE * 0.5, Color::new(0.9, 0.9, 0.7, 1.0));
+            draw_line(0.0, MAP_HEIGHT as f32 * TILE_SIZE * 0.5, MAP_WIDTH as f32 * TILE_SIZE, MAP_HEIGHT as f32 * TILE_SIZE * 0.5, 2.0, BLACK);
+        }
         
         // 2. Сетка
         for x in 0..=MAP_WIDTH {
-            draw_line(x as f32 * TILE_SIZE, 0.0, x as f32 * TILE_SIZE, MAP_HEIGHT as f32 * TILE_SIZE, 1.0, Color::new(0.0, 0.0, 0.0, 0.2));
+            draw_line(x as f32 * TILE_SIZE, 0.0, x as f32 * TILE_SIZE, MAP_HEIGHT as f32 * TILE_SIZE, 1.0, Color::new(0.0, 0.0, 0.0, 0.15));
         }
         for y in 0..=MAP_HEIGHT {
-            draw_line(0.0, y as f32 * TILE_SIZE, MAP_WIDTH as f32 * TILE_SIZE, y as f32 * TILE_SIZE, 1.0, Color::new(0.0, 0.0, 0.0, 0.2));
+            draw_line(0.0, y as f32 * TILE_SIZE, MAP_WIDTH as f32 * TILE_SIZE, y as f32 * TILE_SIZE, 1.0, Color::new(0.0, 0.0, 0.0, 0.15));
         }
 
         // 3. Юниты
@@ -244,18 +233,19 @@ async fn main() {
             let is_selected = Some(i) == selected_unit_index;
             let (_, _, atk_range, _, _, _) = unit.unit_type.stats();
 
-            // Радиус атаки у выбранного
+            // Радиус действия у выбранного
             if is_selected && atk_range > 0.0 {
                 draw_circle_lines(unit.pos.x, unit.pos.y, atk_range, 1.0, Color::new(1.0, 0.0, 0.0, 0.5));
             }
 
             // Тень
             draw_circle(unit.pos.x, unit.pos.y + 2.0, TILE_SIZE / 2.5, Color::new(0.0, 0.0, 0.0, 0.5));
-            // Тело
+            
+            // Основа
             let color = if is_selected { WHITE } else { unit.unit_type.color() };
             draw_circle(unit.pos.x, unit.pos.y, TILE_SIZE / 2.5, color);
             
-            // Иконка "Воздушный" (рисуем треугольник сверху)
+            // Индикатор "Воздушный" (треугольник)
             if unit.unit_type.is_air() {
                 draw_triangle(
                     vec2(unit.pos.x, unit.pos.y - TILE_SIZE / 2.0),
@@ -265,7 +255,7 @@ async fn main() {
                 );
             }
 
-            // HP бар
+            // Полоска здоровья (HP)
             let hp_pct = unit.hp / unit.max_hp;
             draw_rectangle(unit.pos.x - TILE_SIZE/2.0, unit.pos.y - TILE_SIZE/1.5, TILE_SIZE, 4.0, RED);
             draw_rectangle(unit.pos.x - TILE_SIZE/2.0, unit.pos.y - TILE_SIZE/1.5, TILE_SIZE * hp_pct, 4.0, GREEN);
