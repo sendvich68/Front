@@ -11,13 +11,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build APK via Docker
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Install cargo-apk
+        run: cargo install cargo-apk
+
+      - name: Build APK
         run: |
-          docker run --rm \
-            -v $(pwd):/root/src \
-            -w /root/src \
-            notfl3/cargo-apk \
-            bash -c "cargo install cargo-apk && cargo apk build --release"
+          # Указываем путь к NDK (он предустановлен в образах GitHub Actions)
+          export NDK_HOME=$ANDROID_NDK_HOME
+          cargo apk build --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
